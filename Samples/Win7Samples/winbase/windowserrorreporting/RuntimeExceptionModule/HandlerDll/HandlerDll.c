@@ -24,8 +24,118 @@ Abstract:
 
 #include <windows.h>
 #include <werapi.h>
+#include <dbghelp.h>
+#include <strsafe.h>
 
 #define UNREACHABLE_CODE() _ASSERT(FALSE)
+
+#pragma comment(lib, "dbghelp.lib")
+
+
+// Helper function to write log entries
+void WriteToLog(const char* message) {
+    const char* path = "C:\\git\\tmp\\crash-log.txt";
+    FILE* f = fopen(path, "a");
+
+    if (f) {
+        fputs(message, f);
+        fputs("\n", f);
+        fclose(f);
+    }
+
+    // Also try Windows Event Log
+    HANDLE hEventLog = RegisterEventSourceA(NULL, "DDGWerTest");
+    if (hEventLog) {
+        const char* strings[] = { message };
+        ReportEventA(hEventLog, EVENTLOG_INFORMATION_TYPE, 0, 1001, NULL, 1, 0, strings, NULL);
+        DeregisterEventSource(hEventLog);
+    }
+
+#if 0
+    // Also use OutputDebugString for debugger
+    OutputDebugStringW((L"[DDG WER] " + message + L"\n").c_str());
+#endif
+}
+
+const WCHAR* g_szDumpDirectory = L"C:\\git\\tmp\\dumps";
+BOOL CreateCrashDump(
+    const PWER_RUNTIME_EXCEPTION_INFORMATION pExceptionInfo,
+    LPWSTR pszDumpPath,
+    DWORD cchDumpPath)
+{
+    BOOL bSuccess = FALSE;
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    
+    // Get process ID from handle
+    DWORD dwProcessId = GetProcessId(pExceptionInfo->hProcess);
+    if (dwProcessId == 0)
+        return FALSE;
+    
+    // Get thread ID from handle
+    DWORD dwThreadId = GetThreadId(pExceptionInfo->hThread);
+    if (dwThreadId == 0)
+        return FALSE;
+    
+    // Ensure dump directory exists
+    CreateDirectory(g_szDumpDirectory, NULL);
+    
+    // Generate unique filename
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    StringCchPrintf(pszDumpPath, cchDumpPath,
+        L"%s\\crash_%u_%04d%02d%02d_%02d%02d%02d.dmp",
+        g_szDumpDirectory,
+        dwProcessId,
+        st.wYear, st.wMonth, st.wDay,
+        st.wHour, st.wMinute, st.wSecond);
+    
+    // Create dump file
+    hFile = CreateFile(pszDumpPath, GENERIC_WRITE, 0, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    
+    if (hFile != INVALID_HANDLE_VALUE)
+    {
+        // Prepare exception information
+        MINIDUMP_EXCEPTION_INFORMATION mdei = {0};
+        mdei.ThreadId = dwThreadId;
+        
+        // Create EXCEPTION_POINTERS structure
+        EXCEPTION_POINTERS exceptionPointers;
+        exceptionPointers.ExceptionRecord = &pExceptionInfo->exceptionRecord;
+        exceptionPointers.ContextRecord = &pExceptionInfo->context;
+        mdei.ExceptionPointers = &exceptionPointers;
+        mdei.ClientPointers = FALSE; // Pointers are in our process space now
+        
+        // Choose dump type
+        MINIDUMP_TYPE dumpType = (MINIDUMP_TYPE)(
+            MiniDumpWithDataSegs |
+            MiniDumpWithHandleData |
+            MiniDumpWithProcessThreadData |
+            MiniDumpWithModuleHeaders |
+            MiniDumpWithUnloadedModules);
+        
+        // Write dump using the provided process handle
+        bSuccess = MiniDumpWriteDump(
+            pExceptionInfo->hProcess,
+            dwProcessId,
+            hFile,
+            dumpType,
+            &mdei,
+            NULL,
+            NULL);
+        
+        CloseHandle(hFile);
+        
+        // If failed, delete the file
+        if (!bSuccess)
+        {
+            DeleteFile(pszDumpPath);
+        }
+    }
+    
+    return bSuccess;
+}
+
 
 HRESULT WINAPI
 OutOfProcessExceptionEventCallback (
@@ -79,6 +189,7 @@ Return Value:
 --*/
 
 {
+    WriteToLog("[DDG WER] OutOfProcessExceptionEventCallback called");
     PCWSTR EventName = L"MySampleEventName";
     DWORD EventNameLength;
 
@@ -89,10 +200,10 @@ Return Value:
     //
     // Bail out if it is not an exception we want to handle.
     //
-    if (0xABCD1234 != pExceptionInformation->exceptionRecord.ExceptionCode) {
-        *pbOwnershipClaimed = FALSE;
-        return S_OK;
-    }
+    // if (0xABCD1234 != pExceptionInformation->exceptionRecord.ExceptionCode) {
+    //     *pbOwnershipClaimed = FALSE;
+    //     return S_OK;
+    // }
 
     //
     // Claim the exception. We will use 2 signature pairs to uniquely identify our exception.
@@ -114,6 +225,16 @@ Return Value:
     // Copy the event name we use.
     //
     wcscpy_s (pwszEventName, *pchSize, EventName);
+
+    WriteToLog("[DDG WER] Creating crash dump...");
+    WCHAR szDumpPath[MAX_PATH];
+    BOOL res = CreateCrashDump(pExceptionInformation, szDumpPath, MAX_PATH);
+    if (res) {
+        WriteToLog("[DDG WER] Created crash dump");
+    }
+    else {
+        WriteToLog("[DDG WER] Failed to create crash dump");
+    }
 
     return S_OK;
 }
@@ -166,6 +287,7 @@ Return Value:
 --*/
 
 {
+    WriteToLog("[DDG WER] OutOfProcessExceptionEventSignatureCallback called");
     UNREFERENCED_PARAMETER (pContext);
 
 
@@ -270,6 +392,7 @@ Return Value:
 --*/
 
 {
+    WriteToLog("[DDG WER] OutOfProcessExceptionEventDebuggerLaunchCallback called");
     UNREFERENCED_PARAMETER (pContext);
 
 
@@ -296,6 +419,7 @@ DllMain (
 )
 
 {
+    WriteToLog("[DDG WER] DllMain called");
     UNREFERENCED_PARAMETER (DllInstance);
     UNREFERENCED_PARAMETER (Reason);
     UNREFERENCED_PARAMETER (Reserved);
