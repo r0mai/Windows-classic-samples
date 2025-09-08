@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="HandlerDll.c">
+    <ClCompile Include="HandlerDll.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

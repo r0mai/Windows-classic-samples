@@ -169,7 +169,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="HandlerDll.c" />
+    <ClCompile Include="HandlerDll.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="HandlerDll.def" />
